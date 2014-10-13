@@ -1,0 +1,144 @@
+#include <signal.h>
+#include <errno.h>
+#include <pthread.h>
+#include <unistd.h>
+#include <sys/types.h>
+
+void sighandler_func(int signo)
+{
+    INFO(g_logger, "Task terminated!");
+    g_state = CLOSE;
+    CServer_Task::instance()->close(CLOSE);
+    int rtn = 0;
+    int db_link = CConfig::instance()->db_link();
+    sql_context ctx;
+
+    while (!g_ctx.empty()) {
+        ctx_mutex.acquire();
+        ctx = g_ctx.front();
+        EXEC SQL CONTEXT USE :ctx;
+        EXEC SQL COMMIT WORK RELEASE;
+        EXEC SQL CONTEXT FREE :ctx;
+        g_ctx.pop_front();
+        ctx_mutex.release();
+    }
+
+    INFO(g_logger, "Close DB done!");
+    rtn = tpool_destroy(g_pThreadPool, 1);
+    if (rtn < 0) {
+        INFO(g_logger, "Destroy thread pool is failure:" << rtn);
+    } else {
+        INFO(g_logger, "Destroy thread pood is done!");
+    }
+
+    if (lock_fd > 0) {
+    siginfo_t  info;
+
+        close(lock_fd);
+        unlink(lock_file.c_str());
+    }
+
+    INFO(g_logger, "Task is done!");
+    exit(0);
+}
+
+void* sigmgr_thread(void *ptr)
+{
+    int        rtn;
+    int        signo;
+    sigset_t   waitset;
+    pthread_t  ppid = pthread_self();
+
+    pthread_detach(ppid);
+    sigemptyset(&waitset);
+    /* Don's set SIGFPE,SIGILL,SIGSEGV,SIGBUS */
+    sigaddset(&waitset, SIGUSR1);
+    sigaddset(&waitset, SIGUSR2);
+    sigaddset(&waitset, SIGINT);
+    sigaddset(&waitset, SIGQUIT);
+    sigaddset(&waitset, SIGABRT);
+    sigaddset(&waitset, SIGTERM);
+    sigaddset(&waitset, SIGPIPE);
+
+    while (1)  {
+        rtn = sigwait(&waitset, &signo);
+        if (rtn != -1) {
+            INFO(g_logger, "sigwait() fetch the signal:"<< signo);
+            sighandler_func(signo);  /* signal handler */
+        } else {
+            ERROR(g_logger, "sigwait() returned err: " << errno <<", msg:" << strerror(errno));
+        }
+    }
+
+    return (NULL);
+}
+
+void register_sig()
+{
+    sigset_t bset, oset;
+    pthread_t      ppid;
+
+    /* Don's set SIGFPE,SIGILL,SIGSEGV,SIGBUS */
+    sigemptyset(&bset);
+    sigaddset(&bset, SIGUSR1);
+    sigaddset(&bset, SIGUSR2);
+    sigaddset(&bset, SIGINT);
+    sigaddset(&bset, SIGPIPE);
+    sigaddset(&bset, SIGTERM);
+    sigaddset(&bset, SIGQUIT);
+    sigaddset(&bset, SIGABRT);
+
+    if (pthread_sigmask(SIG_BLOCK, &bset, &oset) != 0)
+        printf("!! Set pthread mask failed\n");
+
+    pthread_create(&ppid, NULL, sigmgr_thread, NULL);
+    
+    /*
+    signal(SIGUSR1, term_func);
+    signal(SIGUSR2, term_func);
+    signal(SIGINT, term_func);
+    signal(SIGPIPE, SIG_IGN);
+    signal(SIGTERM, term_func);
+    signal(SIGKILL, term_func);
+    signal(SIGQUIT, term_func);
+    signal(SIGABRT, term_func);
+    */
+
+}
+
+int main(int argc, char *argv[])
+{
+    /* daemonize */
+    
+    /* log init */
+    
+    /* sig init */
+    register_sig();
+    
+    /* socket init:server, client */
+    
+    /* db init:ctx, connect, link pool */
+
+    /* Init Thread Pool: max thread, max queue, queue full is block */
+    g_pThreadPool = tpool_init(CConfig::instance()->max_thread_num(),
+            CConfig::instance()->max_queue_num(), 0);
+    if (g_pThreadPool == NULL) {
+        ERROR(_logger, "Init Threads(" << CConfig::instance()->max_thread_num() << ") failure!");
+        if (lock_fd > 0) {
+            close(lock_fd);
+            unlink(lock_file.c_str());
+        }
+
+        return (EXIT_FAILURE);
+
+    }
+    INFO(_logger, "Init Threads(" << CConfig::instance()->max_thread_num() << ") success!");
+    
+    /* do samething */
+    
+  }  
+    
+    
+    
+    
+    
